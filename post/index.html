@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OpenAI ストリーミング（POST multipart）デモ</title>
+  <style>
+    :root{
+      --bg:#0b0f14; --panel:#0f1520; --muted:#8892a6; --text:#e6edf3; --accent:#4da3ff; --accent-2:#7bd389;
+      --border:#1c2633; --danger:#ff6b6b;
+    }
+    *{ box-sizing:border-box; }
+    body{
+      margin:0; background:var(--bg); color:var(--text);
+      font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,Arial,"Apple Color Emoji","Segoe UI Emoji";
+    }
+    .wrap{ max-width:980px; margin:32px auto; padding:0 16px; }
+    header{ display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; }
+    h1{ font-size:1.15rem; margin:0; letter-spacing:.2px; }
+    .status{ display:flex; align-items:center; gap:10px; }
+    .dot{ width:10px; height:10px; border-radius:50%; background:var(--muted); box-shadow:0 0 0 2px #0003; transition:background .2s ease; }
+    .dot.live{ background:var(--accent-2); }
+    .muted{ color:var(--muted); font-size:.9rem; }
+
+    .grid{ display:grid; gap:16px; }
+    @media (min-width: 880px){ .grid{ grid-template-columns:1.1fr .9fr; } }
+
+    .card{
+      background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:16px;
+      box-shadow:0 8px 24px #0008;
+    }
+    label{ display:block; font-weight:600; margin-bottom:6px; }
+    input[type="text"], textarea{
+      width:100%; background:#0b121b; color:var(--text);
+      border:1px solid var(--border); border-radius:10px; padding:10px 12px;
+      outline:none; transition:border .2s ease, box-shadow .2s ease;
+    }
+    textarea{ min-height:100px; resize:vertical; }
+    input[type="text"]:focus, textarea:focus{
+      border-color:#2a8bdc; box-shadow:0 0 0 3px rgba(77,163,255,.15);
+    }
+    .row{ display:flex; gap:10px; align-items:center; }
+    .row > *{ flex:1; }
+
+    .btns{ display:flex; gap:10px; flex-wrap:wrap; margin-top:12px; }
+    button{
+      appearance:none; border:none; cursor:pointer; color:white; font-weight:600;
+      padding:10px 14px; border-radius:10px; transition:transform .03s ease, opacity .2s ease, background .2s ease;
+      background:linear-gradient(180deg, #2a8bdc, #1769b1);
+      box-shadow:0 6px 20px rgba(41,135,212,.35), inset 0 1px 0 #71c2ff33;
+    }
+    button:active{ transform:translateY(1px); }
+    button.secondary{ background:linear-gradient(180deg, #485a78, #39465e); }
+    button.danger{ background:linear-gradient(180deg, #ff8484, #db5353); }
+    button:disabled{ opacity:.6; cursor:not-allowed; }
+
+    .out{
+      background:#050a10; border:1px solid var(--border); border-radius:12px; padding:12px;
+      height:260px; overflow:auto; white-space:pre-wrap; word-wrap:break-word;
+      font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+    }
+    .kbd{
+      font-family: ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;
+      background:#0b121b; border:1px solid var(--border); padding:2px 6px; border-radius:6px; color:var(--muted); font-size:.9rem;
+    }
+    details summary{ cursor:pointer; }
+    footer{ margin-top:18px; color:var(--muted); font-size:.9rem; }
+    .pill{ display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid var(--border); color:var(--muted); font-size:.8rem; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>OpenAI ストリーミング（POST / multipart）</h1>
+      <div class="status">
+        <span class="dot" id="dot"></span>
+        <span class="muted" id="status">待機中</span>
+      </div>
+    </header>
+
+    <div class="grid">
+      <!-- 左: フォーム -->
+      <div class="card">
+        <div class="row" style="margin-bottom:10px">
+          <div>
+            <label for="endpoint">エンドポイント</label>
+            <input id="endpoint" type="text"
+                   value="https://asia-northeast1-awangga.cloudfunctions.net/BUD2Y-AI/chat/openai"
+                   placeholder="https://.../chat/openai" />
+          </div>
+        </div>
+
+        <label for="prompt">プロンプト</label>
+        <textarea id="prompt" placeholder="例）添付PDFを3つの要点で要約してください。">添付PDFを3つの要点で要約してください。</textarea>
+
+        <div class="row" style="margin-top:10px">
+          <div>
+            <label for="image_url">画像URL（任意）</label>
+            <input id="image_url" type="text" placeholder="https://example.com/image.png" />
+          </div>
+        </div>
+
+        <div style="margin-top:10px">
+          <label for="image_data_url">画像データURL（任意 / data:image/png;base64,...）</label>
+          <textarea id="image_data_url" placeholder="data:image/png;base64,AAAA..."></textarea>
+        </div>
+
+        <div style="margin-top:10px">
+          <label for="file">添付ファイル（複数可 / PDF・CSV・TXT など）</label>
+          <input id="file" type="file" multiple />
+          <div class="muted" style="margin-top:6px">※ 送信時に multipart/form-data でアップロードします。</div>
+        </div>
+
+        <div class="btns">
+          <button id="btnStart">送信してストリーム開始</button>
+          <button id="btnStop" class="danger" disabled>停止</button>
+          <button id="btnClear" class="secondary">出力をクリア</button>
+          <button id="btnCopy" class="secondary">出力をコピー</button>
+        </div>
+
+        <div style="margin-top:8px">
+          <span class="pill">multipart/form-data</span>
+          <span class="pill">ReadableStream</span>
+          <span class="pill">SSE（サーバー側）</span>
+        </div>
+      </div>
+
+      <!-- 右: 出力 -->
+      <div class="card">
+        <label>出力</label>
+        <div id="out" class="out"></div>
+        <details style="margin-top:10px">
+          <summary class="muted">Raw ストリーム（デバッグ）</summary>
+          <div id="raw" class="out" style="height:160px"></div>
+        </details>
+      </div>
+    </div>
+
+    <footer>
+      <div>ヒント: <span class="kbd">送信してストリーム開始</span>で開始、<span class="kbd">停止</span>で中断。サーバーが <code>event:</code> / <code>data:</code> 形式（SSE）で返す場合、下の Raw に生データが流れます。</div>
+    </footer>
+  </div>
+
+  <script>
+    // ====== 設定 / 状態 ======
+    let controller = null; // AbortController
+    const $ = (id) => document.getElementById(id);
+    const dot = $("dot"), statusEl = $("status");
+    const out = $("out"), raw = $("raw");
+    const btnStart = $("btnStart"), btnStop = $("btnStop");
+    const btnClear = $("btnClear"), btnCopy = $("btnCopy");
+
+    function setLive(live){
+      dot.classList.toggle("live", live);
+      statusEl.textContent = live ? "ストリーミング中..." : "待機中";
+      btnStart.disabled = live;
+      btnStop.disabled = !live;
+    }
+    function appendOut(txt){
+      out.textContent += txt;
+      out.scrollTop = out.scrollHeight;
+    }
+    function appendRaw(line){
+      raw.textContent += line;
+      raw.scrollTop = raw.scrollHeight;
+    }
+
+    // 簡易 SSE ラインパーサ（必要な場合のみ使用）
+    // OpenAI からのイベント（例: response.output_text.delta）を取り出して out に表示
+    function parseAndRenderSSEChunk(chunkText){
+      appendRaw(chunkText);  // デバッグ用にそのまま Raw に表示
+
+      // SSE は空行区切り。複数イベントが同一チャンクに含まれる場合あり。
+      const events = chunkText.split(/\n\n+/);
+      for (const ev of events) {
+        if (!ev.trim()) continue;
+        const lines = ev.split(/\n/);
+        let name = "message";
+        let dataParts = [];
+        for (const ln of lines) {
+          if (ln.startsWith("event:")) {
+            name = ln.slice(6).trim();
+          } else if (ln.startsWith("data:")) {
+            dataParts.push(ln.slice(5).trim());
+          }
+        }
+        const data = dataParts.join("\n");
+        if (!data) continue;
+
+        // OpenAI Responses API の delta なら { "delta": "..." }
+        if (name === "response.output_text.delta") {
+          try {
+            const o = JSON.parse(data);
+            if (o && typeof o.delta === "string") {
+              appendOut(o.delta);
+            }
+          } catch {
+            // JSONでなければ無視
+          }
+        }
+        // 完了イベント（任意名）やエラーは必要に応じて処理
+        if (name === "response.completed" || name === "done") {
+          stopStream();
+        }
+      }
+    }
+
+    async function startStream(){
+      const endpoint = $("endpoint").value.trim();
+      if (!endpoint) {
+        alert("エンドポイントを入力してください。");
+        return;
+      }
+
+      // FormData 組み立て
+      const fd = new FormData();
+      const prompt = $("prompt").value.trim();
+      const imageUrl = $("image_url").value.trim();
+      const imageDataUrl = $("image_data_url").value.trim();
+
+      if (prompt) fd.append("prompt", prompt);
+      if (imageUrl) fd.append("image_url", imageUrl);
+      if (imageDataUrl) fd.append("image_data_url", imageDataUrl);
+
+      const files = $("file").files;
+      for (let i = 0; i < files.length; i++) {
+        fd.append("files", files[i]); // 複数可
+      }
+
+      // フロント → サーバ: POST multipart
+      try {
+        controller = new AbortController();
+        setLive(true);
+        out.textContent = ""; // 前回の出力をクリア（必要に応じて外す）
+        raw.textContent = "";
+
+        const resp = await fetch(endpoint, {
+          method: "POST",
+          body: fd,
+          signal: controller.signal,
+        });
+
+        if (!resp.ok || !resp.body) {
+          appendRaw(`HTTP Error: ${resp.status}\n`);
+          setLive(false);
+          return;
+        }
+
+        const reader = resp.body.getReader();
+        const decoder = new TextDecoder();
+
+        let buf = "";
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+
+          // サーバが SSE 形式で返すならパースして delta を抽出
+          // そのまま出したい場合は appendOut(buf) でもOK
+          parseAndRenderSSEChunk(buf);
+          buf = "";
+        }
+      } catch (err) {
+        if (err.name !== "AbortError") {
+          appendRaw(`Fetch Error: ${err}\n`);
+        }
+      } finally {
+        setLive(false);
+      }
+    }
+
+    function stopStream(){
+      try { controller?.abort(); } catch {}
+      controller = null;
+      setLive(false);
+    }
+
+    // ====== ボタン ======
+    btnStart.addEventListener("click", startStream);
+    btnStop.addEventListener("click", stopStream);
+    btnClear.addEventListener("click", () => { out.textContent = ""; raw.textContent = ""; });
+    btnCopy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(out.textContent);
+        statusEl.textContent = "コピーしました";
+        setTimeout(()=> statusEl.textContent = (controller ? "ストリーミング中..." : "待機中"), 1200);
+      } catch {
+        statusEl.textContent = "コピー失敗";
+        setTimeout(()=> statusEl.textContent = (controller ? "ストリーミング中..." : "待機中"), 1200);
+      }
+    });
+  </script>
+</body>
+</html>
