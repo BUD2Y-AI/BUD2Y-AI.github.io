@@ -1,0 +1,242 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SSE OpenAI Proxy Demo</title>
+  <style>
+    :root{
+      --bg:#0b0f14; --panel:#0f1520; --muted:#8892a6; --text:#e6edf3; --accent:#4da3ff; --accent-2:#7bd389;
+      --border:#1c2633; --danger:#ff6b6b;
+    }
+    *{ box-sizing:border-box; }
+    body{
+      margin:0; background:var(--bg); color:var(--text); font:16px/1.5 system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+    }
+    .wrap{
+      max-width:980px; margin:32px auto; padding:0 16px;
+    }
+    header{
+      display:flex; align-items:center; justify-content:space-between; margin-bottom:16px;
+    }
+    h1{ font-size:1.25rem; margin:0; letter-spacing:.2px; }
+    .status{
+      display:flex; align-items:center; gap:10px;
+    }
+    .dot{
+      width:10px; height:10px; border-radius:50%; background:var(--muted); box-shadow:0 0 0 2px #0003;
+      transition:background .2s ease;
+    }
+    .dot.live{ background:var(--accent-2); }
+    .muted{ color:var(--muted); font-size:.9rem; }
+    .card{
+      background:var(--panel); border:1px solid var(--border); border-radius:14px; padding:16px;
+      box-shadow:0 8px 24px #0008;
+    }
+    .grid{
+      display:grid; gap:16px;
+    }
+    @media (min-width: 880px){
+      .grid{ grid-template-columns: 1.1fr .9fr; }
+    }
+    label{ display:block; font-weight:600; margin-bottom:6px; }
+    input[type="text"], textarea{
+      width:100%; background:#0b121b; color:var(--text);
+      border:1px solid var(--border); border-radius:10px; padding:10px 12px;
+      outline:none; transition:border .2s ease, box-shadow .2s ease;
+    }
+    textarea{ min-height:110px; resize:vertical; }
+    input[type="text"]:focus, textarea:focus{
+      border-color:#2a8bdc; box-shadow:0 0 0 3px rgba(77,163,255,.15);
+    }
+    .row{ display:flex; gap:10px; align-items:center; }
+    .row > *{ flex:1; }
+    .btns{ display:flex; gap:10px; flex-wrap:wrap; }
+    button{
+      appearance:none; border:none; cursor:pointer; color:white; font-weight:600;
+      padding:10px 14px; border-radius:10px; transition:transform .03s ease, opacity .2s ease, background .2s ease;
+      background:linear-gradient(180deg, #2a8bdc, #1769b1);
+      box-shadow:0 6px 20px rgba(41,135,212,.35), inset 0 1px 0 #71c2ff33;
+    }
+    button:active{ transform:translateY(1px); }
+    button.secondary{ background:linear-gradient(180deg, #485a78, #39465e); }
+    button.danger{ background:linear-gradient(180deg, #ff8484, #db5353); }
+    button:disabled{ opacity:.6; cursor:not-allowed; }
+    .out{
+      background:#050a10; border:1px solid var(--border); border-radius:12px; padding:12px;
+      height:260px; overflow:auto; white-space:pre-wrap; word-wrap:break-word;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    }
+    .kbd{
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      background:#0b121b; border:1px solid var(--border); padding:2px 6px; border-radius:6px; color:var(--muted); font-size:.9rem;
+    }
+    footer{ margin-top:18px; color:var(--muted); font-size:.9rem; }
+    .help{ margin-top:8px; }
+    .pill{
+      display:inline-block; padding:2px 8px; border-radius:999px; border:1px solid var(--border); color:var(--muted); font-size:.8rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>SSE Proxy OpenAI (Frontend → GCF → OpenAI)</h1>
+      <div class="status">
+        <span class="dot" id="dot"></span>
+        <span class="muted" id="status">Idle</span>
+      </div>
+    </header>
+
+    <div class="grid">
+      <!-- Left: Form -->
+      <div class="card">
+        <div class="row" style="margin-bottom:10px">
+          <div>
+            <label for="endpoint">Endpoint GCF</label>
+            <input id="endpoint" type="text" placeholder="https://asia-northeast1-awangga.cloudfunctions.net/BUD2Y-AI/chat/openai" value="https://asia-northeast1-awangga.cloudfunctions.net/BUD2Y-AI/chat/openai" />
+          </div>
+          <div>
+            <label for="image_url">Image URL (opsional)</label>
+            <input id="image_url" type="text" placeholder="https://example.com/cat.png" />
+          </div>
+        </div>
+
+        <label for="prompt">Prompt</label>
+        <textarea id="prompt" placeholder="Tulis sesuatu...">Ringkas ini singkat ya.</textarea>
+
+        <div class="btns" style="margin-top:12px">
+          <button id="btnStart">Start Stream</button>
+          <button id="btnStop" class="danger" disabled>Stop</button>
+          <button id="btnClear" class="secondary">Clear Output</button>
+          <button id="btnCopy" class="secondary">Copy</button>
+        </div>
+        <div class="help">
+          <span class="pill">SSE</span>
+          <span class="pill">EventSource</span>
+          <span class="pill">response.output_text.delta</span>
+        </div>
+      </div>
+
+      <!-- Right: Output -->
+      <div class="card">
+        <label>Output</label>
+        <div id="out" class="out"></div>
+        <details style="margin-top:10px">
+          <summary class="muted">Raw Stream (debug)</summary>
+          <div id="raw" class="out" style="height:160px"></div>
+        </details>
+      </div>
+    </div>
+
+    <footer>
+      <div>Tips: tekan <span class="kbd">Start</span> untuk mulai, <span class="kbd">Stop</span> untuk menutup koneksi. Jika server mengirim event bernama <code>response.output_text.delta</code>, halaman ini akan menyusun teks secara inkremental.</div>
+    </footer>
+  </div>
+
+  <script>
+    // ====== STATE ======
+    let es = null;
+    const $ = (id) => document.getElementById(id);
+    const dot = $("dot"), statusEl = $("status");
+    const out = $("out"), raw = $("raw");
+    const btnStart = $("btnStart"), btnStop = $("btnStop");
+    const btnClear = $("btnClear"), btnCopy = $("btnCopy");
+
+    function setLive(live){
+      dot.classList.toggle("live", live);
+      statusEl.textContent = live ? "Streaming..." : "Idle";
+      btnStart.disabled = live;
+      btnStop.disabled = !live;
+    }
+    function appendOut(txt){
+      out.textContent += txt;
+      out.scrollTop = out.scrollHeight;
+    }
+    function appendRaw(line){
+      raw.textContent += line;
+      raw.scrollTop = raw.scrollHeight;
+    }
+    function buildURL(){
+      const endpoint = $("endpoint").value.trim() || "/chat/openai";
+      const prompt = $("prompt").value.trim();
+      const imageUrl = $("image_url").value.trim();
+
+      const params = new URLSearchParams();
+      if(prompt) params.set("prompt", prompt);
+      if(imageUrl) params.set("image_url", imageUrl);
+
+      // Pastikan absolute/relative URL tetap valid
+      return endpoint + (endpoint.includes("?") ? "&" : "?") + params.toString();
+    }
+
+    // ====== EVENT HANDLERS ======
+    btnStart.addEventListener("click", () => {
+      if (es) { try { es.close(); } catch{} }
+      out.textContent = ""; // reset jika mau
+      raw.textContent = "";
+
+      const url = buildURL();
+      appendRaw(`--> CONNECT ${url}\n`);
+      es = new EventSource(url);
+      setLive(true);
+
+      // Default "message" (baris data tanpa "event:")
+      es.addEventListener("message", (e) => {
+        appendRaw(`[message] ${e.data}\n`);
+        // Tidak semua server mengirim default message.
+        // Jika isi e.data adalah JSON delta, bisa diproses di sini.
+      });
+
+      // Event khusus delta
+      es.addEventListener("response.output_text.delta", (e) => {
+        appendRaw(`[delta] ${e.data}\n`);
+        try {
+          const obj = JSON.parse(e.data); // { delta: "..." }
+          if (obj && typeof obj.delta === "string") {
+            appendOut(obj.delta);
+          }
+        } catch { /* biarkan */ }
+      });
+
+      // Done dari server
+      es.addEventListener("done", () => {
+        appendRaw(`[done]\n`);
+        try { es.close(); } catch{}
+        setLive(false);
+      });
+
+      // Error
+      es.addEventListener("error", (e) => {
+        appendRaw(`[error] ${e?.message || "SSE error"}\n`);
+        try { es.close(); } catch{}
+        setLive(false);
+      });
+    });
+
+    btnStop.addEventListener("click", () => {
+      if (es) { es.close(); es = null; }
+      setLive(false);
+    });
+
+    btnClear.addEventListener("click", () => {
+      out.textContent = "";
+      raw.textContent = "";
+    });
+
+    btnCopy.addEventListener("click", async () => {
+      try {
+        await navigator.clipboard.writeText(out.textContent);
+        statusEl.textContent = "Copied!";
+        setTimeout(()=> statusEl.textContent = es ? "Streaming..." : "Idle", 1200);
+      } catch {
+        statusEl.textContent = "Copy failed";
+        setTimeout(()=> statusEl.textContent = es ? "Streaming..." : "Idle", 1200);
+      }
+    });
+
+    // Opsi: start otomatis di load (matikan jika tidak perlu)
+    // window.addEventListener("load", () => btnStart.click());
+  </script>
+</body>
+</html>
